@@ -24,6 +24,7 @@ dependencies = [
     "python-bidi>=0.4",
     "slowapi>=0.1.9",
     "python-multipart>=0.0.9",
+    "hijridate>=2.4",
 ]
 
 [project.optional-dependencies]

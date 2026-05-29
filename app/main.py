@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import analysis, chat, chats, health, library, library_chats
+from app.api import analysis, chat, chats, exports, health, library, library_chats
 from app.config import settings
 from app.core.library import get_library
 from app.core.rag import get_rag
@@ -51,3 +51,4 @@ app.include_router(chats.router)
 app.include_router(library.router)
 app.include_router(library_chats.router)
 app.include_router(analysis.router)
+app.include_router(exports.router)
