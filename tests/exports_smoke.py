@@ -52,6 +52,9 @@ def setup_library_chat(c: httpx.Client) -> str:
     return chat_id
 
 
+DOCX_MAGIC = b"PK\x03\x04"
+
+
 def test_chat_exports(c: httpx.Client, chat_id: str, formats: set[str]) -> None:
     print("\n=== Chat exports ===")
     if "md" in formats:
@@ -64,6 +67,14 @@ def test_chat_exports(c: httpx.Client, chat_id: str, formats: set[str]) -> None:
         _check("chat md has Sources line", "**Sources:**" in body)
         cd = r.headers.get("content-disposition", "")
         _check("chat md filename attached", "filename=" in cd, cd)
+    if "docx" in formats:
+        r = c.get(f"{URL}/api/chats/{chat_id}/export/docx")
+        _check("chat docx status 200", r.status_code == 200, f"got {r.status_code}")
+        _check("chat docx is a real .docx (PK header)", r.content[:4] == DOCX_MAGIC)
+        _check("chat docx has docx mime",
+               "wordprocessingml" in r.headers.get("content-type", ""),
+               r.headers.get("content-type", ""))
+        _check("chat docx bytes > 4KB", len(r.content) > 4000, f"{len(r.content)} bytes")
 
 
 def test_library_exports(c: httpx.Client, chat_id: str, formats: set[str]) -> None:
@@ -77,6 +88,11 @@ def test_library_exports(c: httpx.Client, chat_id: str, formats: set[str]) -> No
         _check("library md has Topic line", "**Topic:**" in body)
         _check("library md has Question block", "## Question" in body)
         _check("library md has Response block", "## Response" in body)
+    if "docx" in formats:
+        r = c.get(f"{URL}/api/library/chats/{chat_id}/export/docx")
+        _check("library docx status 200", r.status_code == 200, f"got {r.status_code}")
+        _check("library docx is a real .docx (PK header)", r.content[:4] == DOCX_MAGIC)
+        _check("library docx bytes > 4KB", len(r.content) > 4000, f"{len(r.content)} bytes")
 
 
 def test_brief_exports(c: httpx.Client, formats: set[str]) -> None:
@@ -93,6 +109,11 @@ def test_brief_exports(c: httpx.Client, formats: set[str]) -> None:
         _check("brief md status 200", r.status_code == 200, f"got {r.status_code}")
         body = r.text
         _check("brief md has Generated header", "**Generated:**" in body)
+    if "docx" in formats:
+        r = c.get(f"{URL}/api/analysis/documents/{doc_id}/brief/export/docx")
+        _check("brief docx status 200", r.status_code == 200, f"got {r.status_code}")
+        _check("brief docx is a real .docx (PK header)", r.content[:4] == DOCX_MAGIC)
+        _check("brief docx bytes > 4KB", len(r.content) > 4000, f"{len(r.content)} bytes")
 
 
 def test_404_paths(c: httpx.Client) -> None:
