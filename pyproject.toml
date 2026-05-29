@@ -1,0 +1,51 @@
+[project]
+name = "tadqeeq-backend"
+version = "0.1.0"
+description = "Bilingual (EN/AR) Islamic finance RAG service for Saudi (SAMA + CMA) compliance."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "M-AlAteegi" }]
+license = { text = "MIT" }
+
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "httpx>=0.27",
+    "anthropic>=0.34",
+    "chromadb>=0.5",
+    "sentence-transformers>=2.7",
+    "rank-bm25>=0.2.2",
+    "pymupdf>=1.24",
+    "python-docx>=1.1",
+    "reportlab>=4.0",
+    "arabic-reshaper>=3.0",
+    "python-bidi>=0.4",
+    "slowapi>=0.1.9",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "RUF", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
