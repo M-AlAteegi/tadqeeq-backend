@@ -53,6 +53,7 @@ def setup_library_chat(c: httpx.Client) -> str:
 
 
 DOCX_MAGIC = b"PK\x03\x04"
+PDF_MAGIC = b"%PDF-"
 
 
 def test_chat_exports(c: httpx.Client, chat_id: str, formats: set[str]) -> None:
@@ -75,6 +76,12 @@ def test_chat_exports(c: httpx.Client, chat_id: str, formats: set[str]) -> None:
                "wordprocessingml" in r.headers.get("content-type", ""),
                r.headers.get("content-type", ""))
         _check("chat docx bytes > 4KB", len(r.content) > 4000, f"{len(r.content)} bytes")
+    if "pdf" in formats:
+        r = c.get(f"{URL}/api/chats/{chat_id}/export/pdf")
+        _check("chat pdf status 200", r.status_code == 200, f"got {r.status_code}")
+        _check("chat pdf magic %PDF-", r.content[:5] == PDF_MAGIC)
+        _check("chat pdf mime", r.headers.get("content-type", "").startswith("application/pdf"))
+        _check("chat pdf bytes > 1KB", len(r.content) > 1000, f"{len(r.content)} bytes")
 
 
 def test_library_exports(c: httpx.Client, chat_id: str, formats: set[str]) -> None:
@@ -93,6 +100,11 @@ def test_library_exports(c: httpx.Client, chat_id: str, formats: set[str]) -> No
         _check("library docx status 200", r.status_code == 200, f"got {r.status_code}")
         _check("library docx is a real .docx (PK header)", r.content[:4] == DOCX_MAGIC)
         _check("library docx bytes > 4KB", len(r.content) > 4000, f"{len(r.content)} bytes")
+    if "pdf" in formats:
+        r = c.get(f"{URL}/api/library/chats/{chat_id}/export/pdf")
+        _check("library pdf status 200", r.status_code == 200, f"got {r.status_code}")
+        _check("library pdf magic %PDF-", r.content[:5] == PDF_MAGIC)
+        _check("library pdf bytes > 1KB", len(r.content) > 1000, f"{len(r.content)} bytes")
 
 
 def test_brief_exports(c: httpx.Client, formats: set[str]) -> None:
@@ -114,6 +126,11 @@ def test_brief_exports(c: httpx.Client, formats: set[str]) -> None:
         _check("brief docx status 200", r.status_code == 200, f"got {r.status_code}")
         _check("brief docx is a real .docx (PK header)", r.content[:4] == DOCX_MAGIC)
         _check("brief docx bytes > 4KB", len(r.content) > 4000, f"{len(r.content)} bytes")
+    if "pdf" in formats:
+        r = c.get(f"{URL}/api/analysis/documents/{doc_id}/brief/export/pdf")
+        _check("brief pdf status 200", r.status_code == 200, f"got {r.status_code}")
+        _check("brief pdf magic %PDF-", r.content[:5] == PDF_MAGIC)
+        _check("brief pdf bytes > 1KB", len(r.content) > 1000, f"{len(r.content)} bytes")
 
 
 def test_404_paths(c: httpx.Client) -> None:

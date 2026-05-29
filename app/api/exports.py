@@ -24,6 +24,11 @@ from app.core.exports_docx import (
     export_chat_docx,
     export_library_docx,
 )
+from app.core.exports_pdf import (
+    export_brief_pdf,
+    export_chat_pdf,
+    export_library_pdf,
+)
 from app.core.history import get_library_store, get_regular_store
 from app.core.library import get_library
 
@@ -52,6 +57,14 @@ def _docx_response(content: bytes, filename: str) -> Response:
     return Response(
         content=content,
         media_type=DOCX_MIME,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _pdf_response(content: bytes, filename: str) -> Response:
+    return Response(
+        content=content,
+        media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
@@ -143,3 +156,43 @@ def export_brief_docx_endpoint(doc_id: str, date_format: str = "dual") -> Respon
     data = export_brief_docx(brief["report"], date_format=date_format)
     fname = _safe_filename(f"tadqeeq-brief-{rec.get('filename', doc_id)}", "docx")
     return _docx_response(data, fname)
+
+
+@router.get("/api/chats/{chat_id}/export/pdf")
+def export_chat_pdf_endpoint(chat_id: str, date_format: str = "dual") -> Response:
+    chat = get_regular_store().get(chat_id)
+    if chat is None:
+        raise HTTPException(status_code=404, detail=f"Chat not found: {chat_id}")
+    data = export_chat_pdf(chat.get("messages", []), date_format=date_format)
+    return _pdf_response(data, _safe_filename(f"tadqeeq-chat-{chat_id}", "pdf"))
+
+
+@router.get("/api/library/chats/{chat_id}/export/pdf")
+def export_library_chat_pdf_endpoint(chat_id: str, date_format: str = "dual") -> Response:
+    chat = get_library_store().get(chat_id)
+    if chat is None:
+        raise HTTPException(status_code=404, detail=f"Library chat not found: {chat_id}")
+    data = export_library_pdf(
+        chat.get("messages", []),
+        category_label=_category_label(chat.get("category_id")),
+        clause_title="",
+        date_format=date_format,
+    )
+    return _pdf_response(data, _safe_filename(f"tadqeeq-library-{chat_id}", "pdf"))
+
+
+@router.get("/api/analysis/documents/{doc_id}/brief/export/pdf")
+def export_brief_pdf_endpoint(doc_id: str, date_format: str = "dual") -> Response:
+    rec = get_document_store().get(doc_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail=f"Document not found: {doc_id}")
+    brief = rec.get("brief")
+    if not brief or not brief.get("report"):
+        raise HTTPException(
+            status_code=404,
+            detail="No brief cached. Generate one first via "
+            "POST /api/analysis/documents/{id}/brief.",
+        )
+    data = export_brief_pdf(brief["report"], date_format=date_format)
+    fname = _safe_filename(f"tadqeeq-brief-{rec.get('filename', doc_id)}", "pdf")
+    return _pdf_response(data, fname)
