@@ -7,6 +7,7 @@ preprocessing, prompt construction, and out-of-domain guards live here.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import pickle
@@ -432,6 +433,101 @@ class TadqeeqRAG:
             "regulator": regulator,
         }
 
+    def _retrieve_brief_context(self, text: str, doc_lang: str) -> str:
+        chunks = _sentence_aware_chunks(
+            text,
+            max_chars=settings.brief_chunk_max_chars,
+            overlap_sents=settings.brief_chunk_overlap_sents,
+        )
+        chunk_embeddings = self.embedder.encode(chunks)
+        if doc_lang == "ar":
+            targets = [
+                "ما هي المخاطر الرئيسية والمخالفات والعقوبات ومؤشرات الامتثال؟",
+                "ما هي الرسوم ومتطلبات رأس المال والتكاليف والالتزامات المالية؟",
+                "ما هي التواريخ السارية والمواعيد النهائية وفترات التقديم وتواريخ الانتهاء؟",
+            ]
+        else:
+            targets = [
+                "What are the key risks, violations, penalties, and compliance red flags?",
+                "What are the fees, capital requirements, costs, and financial obligations?",
+                "What are the effective dates, deadlines, submission timelines, and expiry dates?",
+            ]
+        unique_indices: set[int] = set()
+        top_k = settings.brief_top_k_chunks
+        for query in targets:
+            query_embedding = self.embedder.encode(query)
+            scores = np.dot(chunk_embeddings, query_embedding)
+            for idx in np.argsort(scores)[-top_k:][::-1]:
+                unique_indices.add(int(idx))
+        return "\n\n...\n\n".join(chunks[i] for i in sorted(unique_indices))
+
+    async def translate(self, text: str, target_lang: str) -> str:
+        if not text or not text.strip():
+            return text
+        target_full = (
+            "Arabic (Modern Standard, العربية الفصحى)" if target_lang == "ar" else "English"
+        )
+        prompt = _TRANSLATE_PROMPT.format(target_full=target_full, text=text.strip())
+        result = await self.provider.generate(
+            system="You are a professional financial-regulatory translator.",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=settings.brief_num_predict,
+            temperature=0.05,
+        )
+        return result.strip()
+
+    async def generate_brief(self, text: str, report_language: str = "auto") -> dict:
+        """Generate the executive brief with optional bilingual output.
+
+        Single synthesis in the document's own language is the factual ground
+        truth; the alternate language is derived by translation, not re-RAGging,
+        so facts can't drift between the two views.
+        """
+        if not text or len(text) < 50:
+            raise ValueError("Document is too short to analyze.")
+        doc_lang = detect_language(text)
+        primary_lang = doc_lang
+        context = await asyncio.to_thread(self._retrieve_brief_context, text, doc_lang)
+        template = _BRIEF_PROMPT_AR if primary_lang == "ar" else _BRIEF_PROMPT_EN
+        prompt = template.format(context=context)
+        system = (
+            "You are a financial-regulatory analyst. Extract only what is in the excerpt."
+            if primary_lang == "en"
+            else "أنت محلل قانوني مالي. استخرج فقط ما هو موجود في النص المُقتبس."
+        )
+        primary_text = await self.provider.generate(
+            system=system,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=settings.brief_num_predict,
+            temperature=0.1,
+        )
+        primary_text = primary_text.strip()
+
+        other_lang = "ar" if primary_lang == "en" else "en"
+        need_translation = (
+            report_language == "bilingual"
+            or (report_language in ("en", "ar") and report_language != primary_lang)
+        )
+        other_text = ""
+        if need_translation:
+            other_text = await self.translate(primary_text, other_lang)
+
+        localized = {primary_lang: primary_text, other_lang: other_text}
+        if report_language == "bilingual":
+            en = localized.get("en") or ""
+            ar = localized.get("ar") or ""
+            report = "\n\n---\n\n".join(s for s in (en, ar) if s)
+        elif report_language in ("en", "ar") and report_language != primary_lang:
+            report = other_text or primary_text
+        else:
+            report = primary_text
+        return {
+            "report": report,
+            "localized": {k: (v or "") for k, v in localized.items()},
+            "primary": primary_lang,
+            "language": report_language,
+        }
+
     async def stream_response(
         self,
         question: str,
@@ -482,6 +578,96 @@ class TadqeeqRAG:
             yield {"type": "error", "message": str(e)}
             return
         yield {"type": "done"}
+
+
+_BRIEF_PROMPT_EN = """=== EXCERPT FROM DOCUMENT ===
+{context}
+=== END OF EXCERPT ===
+
+Read ONLY the text above. Do not use any outside knowledge. Do not ask the user to rephrase.
+
+CRITICAL FORMATTING RULE: Never prefix headings with meta-labels like "Bold heading:" or
+"Heading:". Apply the markdown formatting directly to the heading text. Do not name the
+format — apply it.
+
+Write the "Executive Brief" now in English, in Markdown, following this exact structure:
+
+# 📋 Executive Brief
+
+## 🚨 Key Risks & Red Flags
+- Extract every risk, prohibition, or penalty named in the text above. Quote specific
+  numbers or named entities when they appear.
+- If no explicit risks appear, write: "No explicit risks stated in the text."
+
+## 💰 Financial Obligations
+- Extract every fee, percentage, capital requirement, or fine. Include the figure and
+  currency when given.
+- If none appear, write: "No explicit financial obligations stated."
+
+## 📅 Critical Deadlines
+- Extract every date, deadline, or time period stated.
+- If none appear, write: "No explicit deadlines stated."
+
+Begin directly with the first heading (# 📋 Executive Brief). No preamble."""
+
+_BRIEF_PROMPT_AR = """=== النص المُقتبس من الوثيقة ===
+{context}
+=== نهاية النص ===
+
+اقرأ النص أعلاه فقط، ولا تستخدم أي معلومات خارجية، ولا تطلب من المستخدم إعادة الصياغة.
+
+قاعدة تنسيق صارمة: لا تكتب أبداً بادئات وصفية مثل "عنوان عريض:" أو "Bold heading:" قبل
+أي عنوان. طبّق التشكيل بصيغة Markdown مباشرة على النص. لا تذكر اسم التنسيق إطلاقاً.
+
+اكتب الآن "الملخص التنفيذي" باللغة العربية الفصحى، بصيغة Markdown، ووفق الهيكل التالي حرفياً:
+
+# 📋 الملخص التنفيذي
+
+## 🚨 المخاطر الرئيسية والمؤشرات الحمراء
+- استخرج كل مخاطرة أو مخالفة محتملة أو عقوبة وردت في النص أعلاه.
+- إن لم تُذكر مخاطر صريحة، اكتب: "لم تُذكر مخاطر صريحة في النص."
+
+## 💰 الالتزامات المالية
+- استخرج كل رسم أو نسبة أو متطلب رأسمالي أو غرامة محددة.
+- إن لم تُذكر التزامات مالية، اكتب: "لم تُذكر التزامات مالية صريحة."
+
+## 📅 المواعيد النهائية الحرجة
+- استخرج كل تاريخ أو موعد أو فترة زمنية محددة في النص.
+- إن لم تُذكر مواعيد، اكتب: "لم تُذكر مواعيد صريحة."
+
+ابدأ مباشرةً بالعنوان الأول (# 📋 الملخص التنفيذي) دون أي تمهيد أو مقدمة."""
+
+_TRANSLATE_PROMPT = """You are a professional financial-regulatory translator.
+
+Translate the following Markdown document to {target_full}. Hard requirements:
+- Preserve the EXACT Markdown structure: # / ## headings, **bold**, - bullets, blank lines.
+- Preserve all numbers, percentages, dates, and named entities verbatim.
+- Do NOT add commentary, preamble, or explanatory notes. Output ONLY the translation.
+- Do NOT name the formatting tokens — apply them.
+
+Source document:
+{text}"""
+
+
+def _sentence_aware_chunks(text: str, max_chars: int = 900, overlap_sents: int = 2) -> list[str]:
+    sentence_end = re.compile(r"(?<=[.!?؟])\s+")
+    sentences = [s.strip() for s in sentence_end.split(text) if s.strip()]
+    if not sentences:
+        return [text.strip()] if text.strip() else []
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for sent in sentences:
+        sent_len = len(sent) + 1
+        if current_len + sent_len > max_chars and current:
+            chunks.append(" ".join(current))
+            current = current[-overlap_sents:]
+            current_len = sum(len(s) + 1 for s in current)
+        current.append(sent)
+        current_len += sent_len
+    if current:
+        chunks.append(" ".join(current))
+    return chunks
 
 
 _rag_instance: TadqeeqRAG | None = None
