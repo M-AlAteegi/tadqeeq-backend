@@ -6,8 +6,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import chat, health
+from app.api import chat, health, library
 from app.config import settings
+from app.core.library import get_library
 from app.core.rag import get_rag
 from app.providers import get_provider
 
@@ -22,6 +23,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # CLAUDE_API_KEY is empty, instead of silently working until the first query.
     provider = get_provider()
     logger.info("Resolved LLM provider: %s", provider.name)
+    get_library()  # eager-load clauses.json so first /library/index is instant
     await asyncio.to_thread(get_rag().initialize)
     logger.info("Startup complete")
     yield
@@ -45,3 +47,4 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(chat.router)
+app.include_router(library.router)

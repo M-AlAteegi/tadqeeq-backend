@@ -376,9 +376,17 @@ class TadqeeqRAG:
         return sources
 
     async def generate_response(
-        self, question: str, conversation_context: list[dict] | None = None
+        self,
+        question: str,
+        conversation_context: list[dict] | None = None,
+        force_no_followup: bool = False,
     ) -> dict:
-        """Run the full RAG pipeline and return {answer, sources, regulator}."""
+        """Run the full RAG pipeline and return {answer, sources, regulator}.
+
+        force_no_followup: library-mode queries inline a full clause as context,
+        so follow-up detection (which short-circuits prompt scaffolding) is
+        inappropriate — library callers always pass True.
+        """
         language = detect_language(question)
         if self.is_out_of_domain(question):
             return {
@@ -386,7 +394,7 @@ class TadqeeqRAG:
                 "sources": [],
                 "regulator": "NONE",
             }
-        is_followup = self.is_follow_up(question)
+        is_followup = False if force_no_followup else self.is_follow_up(question)
         docs, regulator, language = self.hybrid_search(question)
         if not docs:
             return {
@@ -425,7 +433,10 @@ class TadqeeqRAG:
         }
 
     async def stream_response(
-        self, question: str, conversation_context: list[dict] | None = None
+        self,
+        question: str,
+        conversation_context: list[dict] | None = None,
+        force_no_followup: bool = False,
     ) -> AsyncIterator[dict]:
         """Stream the RAG response as a sequence of events.
 
@@ -441,7 +452,7 @@ class TadqeeqRAG:
             yield {"type": "token", "text": self.build_out_of_domain_response(language)}
             yield {"type": "done"}
             return
-        is_followup = self.is_follow_up(question)
+        is_followup = False if force_no_followup else self.is_follow_up(question)
         docs, regulator, language = self.hybrid_search(question)
         sources = self._build_sources(docs)
         yield {"type": "meta", "regulator": regulator, "sources": sources}
