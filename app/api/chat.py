@@ -4,7 +4,9 @@ from collections.abc import AsyncIterator
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from app.config import settings
 from app.core.history import get_regular_store
+from app.core.limits import limiter
 from app.core.rag import TadqeeqRAG, get_rag
 from app.models.chat import QueryRequest, QueryResponse, Source
 
@@ -24,7 +26,8 @@ def _resolve_context(req: QueryRequest) -> list[dict] | None:
 
 
 @router.post("/query", response_model=QueryResponse)
-async def query(req: QueryRequest) -> QueryResponse:
+@limiter.limit(lambda: settings.rate_limit_chat)
+async def query(request: Request, req: QueryRequest) -> QueryResponse:
     rag = get_rag()
     if not rag.ready:
         raise HTTPException(status_code=503, detail="RAG system is still initializing")
@@ -81,7 +84,8 @@ async def _stream_events(
 
 
 @router.post("/query/stream")
-async def query_stream(req: QueryRequest, request: Request) -> StreamingResponse:
+@limiter.limit(lambda: settings.rate_limit_chat)
+async def query_stream(request: Request, req: QueryRequest) -> StreamingResponse:
     rag = get_rag()
     if not rag.ready:
         raise HTTPException(status_code=503, detail="RAG system is still initializing")

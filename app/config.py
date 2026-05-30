@@ -37,6 +37,17 @@ class Settings(BaseSettings):
         default=["http://localhost:5173", "http://localhost:3000"]
     )
 
+    api_key: str = Field(
+        default="",
+        description="If set, all /api/* endpoints require Authorization: Bearer <key>. "
+        "Empty in dev (no auth); populate when deploying publicly.",
+    )
+
+    rate_limit_chat: str = Field(default="20/minute")
+    rate_limit_library: str = Field(default="20/minute")
+    rate_limit_brief: str = Field(default="5/minute")
+    rate_limit_upload: str = Field(default="10/minute")
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_origins(cls, v: object) -> object:

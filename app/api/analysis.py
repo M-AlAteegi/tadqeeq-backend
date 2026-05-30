@@ -1,9 +1,11 @@
 import logging
 
-from fastapi import APIRouter, File, HTTPException, Response, UploadFile
+from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFile
 
+from app.config import settings
 from app.core.analysis import ComplianceChecker, DocumentParseError, DocumentProcessor
 from app.core.document_store import get_document_store
+from app.core.limits import limiter
 from app.core.rag import get_rag
 from app.models.analysis import (
     BriefRequest,
@@ -23,7 +25,8 @@ _checker = ComplianceChecker()
 
 
 @router.post("/documents", response_model=DocumentMetadata, status_code=201)
-async def upload_document(file: UploadFile = File(...)) -> DocumentMetadata:
+@limiter.limit(lambda: settings.rate_limit_upload)
+async def upload_document(request: Request, file: UploadFile = File(...)) -> DocumentMetadata:
     filename = file.filename or "uploaded.pdf"
     data = await file.read()
     try:
@@ -86,7 +89,8 @@ def get_compliance(doc_id: str) -> ComplianceResult:
 
 
 @router.post("/documents/{doc_id}/brief", response_model=BriefResult)
-async def run_brief(doc_id: str, req: BriefRequest = BriefRequest()) -> BriefResult:
+@limiter.limit(lambda: settings.rate_limit_brief)
+async def run_brief(request: Request, doc_id: str, req: BriefRequest = BriefRequest()) -> BriefResult:
     rag = get_rag()
     if not rag.ready:
         raise HTTPException(status_code=503, detail="RAG system is still initializing")

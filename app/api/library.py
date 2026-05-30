@@ -4,8 +4,10 @@ from collections.abc import AsyncIterator
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from app.config import settings
 from app.core.history import get_library_store
 from app.core.library import get_library
+from app.core.limits import limiter
 from app.core.rag import TadqeeqRAG, get_rag
 from app.models.chat import Source
 from app.models.library import ClauseDetail, LibraryIndex, LibraryQueryRequest, LibraryQueryResponse
@@ -39,7 +41,8 @@ def clause(clause_id: str) -> ClauseDetail:
 
 
 @router.post("/query", response_model=LibraryQueryResponse)
-async def library_query(req: LibraryQueryRequest) -> LibraryQueryResponse:
+@limiter.limit(lambda: settings.rate_limit_library)
+async def library_query(request: Request, req: LibraryQueryRequest) -> LibraryQueryResponse:
     rag = get_rag()
     if not rag.ready:
         raise HTTPException(status_code=503, detail="RAG system is still initializing")
@@ -95,7 +98,8 @@ async def _stream_events(
 
 
 @router.post("/query/stream")
-async def library_query_stream(req: LibraryQueryRequest, request: Request) -> StreamingResponse:
+@limiter.limit(lambda: settings.rate_limit_library)
+async def library_query_stream(request: Request, req: LibraryQueryRequest) -> StreamingResponse:
     rag = get_rag()
     if not rag.ready:
         raise HTTPException(status_code=503, detail="RAG system is still initializing")
