@@ -7,6 +7,8 @@ class Category(BaseModel):
     id: str
     label_en: str
     label_ar: str = ""
+    description_en: str = ""
+    description_ar: str = ""
 
 
 class ClauseSummary(BaseModel):
