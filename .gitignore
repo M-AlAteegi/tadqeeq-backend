@@ -25,6 +25,7 @@ env/
 
 data/chat_history/
 data/library_chat_history/
+data/analysis_documents/
 data/settings.json
 
 artifacts/
