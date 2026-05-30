@@ -42,6 +42,20 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "RUF", "SIM"]
 
+[tool.ruff.lint.per-file-ignores]
+# FastAPI explicitly recommends call-defaults for Body / File / Depends — the
+# ruff B008 warning is wrong about this pattern for endpoint handlers.
+"app/api/*.py" = ["B008"]
+# Core modules contain intentional Arabic strings (regex patterns, prompts,
+# normalization comments) — ruff's ambiguous-unicode warning is noise.
+# E501 line-length exceptions are for Arabic prompt strings where breaking
+# the line breaks the prompt content.
+"app/core/*.py" = ["RUF001", "E501"]
+# Same for utility modules with Arabic-aware text helpers.
+"app/core/utils.py" = ["RUF001"]
+# Test scripts use intentional unicode (em dashes, Arabic characters).
+"tests/*.py" = ["RUF001", "E501"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true

@@ -17,6 +17,8 @@ from app.api import (
     health,
     library,
     library_chats,
+)
+from app.api import (
     settings as settings_router,
 )
 from app.config import settings

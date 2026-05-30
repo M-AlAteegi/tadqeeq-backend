@@ -33,7 +33,8 @@ def _check(label: str, condition: bool, detail: str = "") -> None:
 
 def test_regular_chat(c: httpx.Client) -> None:
     print("\n=== Regular chat lifecycle ===")
-    r = c.post(f"{URL}/api/chats", json={}); r.raise_for_status()
+    r = c.post(f"{URL}/api/chats", json={})
+    r.raise_for_status()
     chat_id = r.json()["id"]
     _check("create returns id", bool(chat_id), f"id={chat_id}")
 
@@ -41,7 +42,8 @@ def test_regular_chat(c: httpx.Client) -> None:
     _check("fresh chat has 0 messages", len(detail["messages"]) == 0)
 
     payload = {"question": "What is the minimum capital for a finance company?", "chat_id": chat_id}
-    r = c.post(f"{URL}/api/chat/query", json=payload, timeout=180); r.raise_for_status()
+    r = c.post(f"{URL}/api/chat/query", json=payload, timeout=180)
+    r.raise_for_status()
     body = r.json()
     _check("query returns answer", len(body["answer"]) > 20)
     _check("query returns SAMA regulator", body["regulator"] == "SAMA", body["regulator"])
@@ -67,7 +69,8 @@ def test_regular_chat(c: httpx.Client) -> None:
 
 def test_library_chat(c: httpx.Client) -> None:
     print("\n=== Library chat lifecycle ===")
-    r = c.post(f"{URL}/api/library/chats", json={"category_id": "murabaha"}); r.raise_for_status()
+    r = c.post(f"{URL}/api/library/chats", json={"category_id": "murabaha"})
+    r.raise_for_status()
     chat_id = r.json()["id"]
     _check("create returns id", bool(chat_id), f"id={chat_id}")
 
@@ -75,7 +78,8 @@ def test_library_chat(c: httpx.Client) -> None:
     _check("category_id stored", detail.get("category_id") == "murabaha")
 
     payload = {"question": "Brief: AAOIFI cost-disclosure rules.", "chat_id": chat_id}
-    r = c.post(f"{URL}/api/library/query", json=payload, timeout=180); r.raise_for_status()
+    r = c.post(f"{URL}/api/library/query", json=payload, timeout=180)
+    r.raise_for_status()
     body = r.json()
     _check("library query returns answer", len(body["answer"]) > 20)
     _check("library query echoes chat_id", body["chat_id"] == chat_id)
