@@ -1,0 +1,40 @@
+# Dev compose for tadqeeq-backend.
+#
+# Two volumes mounted:
+#   - ./data           — writable: chat history, library chat history,
+#                                  uploaded analysis documents, settings.json
+#   - ../TadqeeqAI     — read-only: the v3.x corpus (chroma_db_v2/,
+#                                   bm25_index.pkl, documents.json, clauses.json)
+#                                   Override TADQEEQ_CORPUS_PATH for prod.
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: tadqeeq-backend:dev
+    container_name: tadqeeq-backend
+    ports:
+      - "8765:8765"
+    environment:
+      LLM_PROVIDER: ${LLM_PROVIDER:-claude}
+      CLAUDE_API_KEY: ${CLAUDE_API_KEY:-}
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-haiku-4-5-20251001}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-aya:8b}
+      API_KEY: ${API_KEY:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
+    volumes:
+      - ./data:/data
+      - ${TADQEEQ_CORPUS_PATH:-../TadqeeqAI}:/data/corpus:ro
+    extra_hosts:
+      # Lets the container reach the host's Ollama on Windows / macOS /
+      # Linux with --add-host (Linux already auto-injects this in newer Docker).
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8765/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3

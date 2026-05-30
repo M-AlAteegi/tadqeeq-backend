@@ -12,17 +12,47 @@ Part of the TadqeeqAI v4 architecture:
 
 Predecessor: [TadqeeqAI](https://github.com/M-AlAteegi/TadqeeqAI) (v3.x, PyWebView desktop app — archived).
 
-## Quickstart
+## Quickstart (Python)
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 Copy-Item .env.example .env  # then edit CLAUDE_API_KEY
-uvicorn app.main:app --reload
+uvicorn app.main:app --port 8765
 ```
 
-Open <http://localhost:8000/docs> for the OpenAPI UI, or <http://localhost:8000/health> for a quick sanity check.
+Open <http://localhost:8765/docs> for the OpenAPI UI, or <http://localhost:8765/health> for a quick sanity check.
+
+## Quickstart (Docker)
+
+Assumes Docker Desktop installed and the sibling `TadqeeqAI` v3.x repo
+sits at `../TadqeeqAI/` (for the corpus). Override `TADQEEQ_CORPUS_PATH`
+to point elsewhere.
+
+```bash
+# Set your Claude key in the environment (or in a .env beside the compose file)
+export CLAUDE_API_KEY=sk-ant-...
+
+docker compose up --build
+```
+
+The compose file mounts `./data` for writable state (chat history,
+settings, uploaded documents) and `${TADQEEQ_CORPUS_PATH}` read-only
+for the SAMA/CMA corpus.
+
+To run against local Ollama from inside the container, set
+`LLM_PROVIDER=ollama`; the container reaches the host's Ollama via
+`host.docker.internal:11434` (already configured).
+
+## Auth + rate limits
+
+- Set `API_KEY=<some-secret>` in `.env` (or compose `environment:`) to
+  require `Authorization: Bearer <some-secret>` on every `/api/*`
+  endpoint. `/health` stays open. Empty by default for dev.
+- Per-endpoint rate limits (`RATE_LIMIT_CHAT`, `RATE_LIMIT_LIBRARY`,
+  `RATE_LIMIT_BRIEF`, `RATE_LIMIT_UPLOAD`) are env-driven; defaults
+  are sized for solo dev and should be tightened for public deploys.
 
 ## Architecture
 
