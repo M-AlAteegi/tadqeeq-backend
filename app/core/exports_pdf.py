@@ -126,15 +126,31 @@ def shape_arabic(text: str) -> str:
         return text
 
 
-def _sanitize_inline(text: str) -> str:
-    """Strip markdown markup, HTML-escape, and replace angle brackets that
-    would otherwise be interpreted as ReportLab tags."""
-    text = html.escape(text)
+def _strip_md_markers(text: str) -> str:
+    """Strip markdown markup tokens. NOT HTML-safe — callers must escape
+    AFTER calling this if they're using ReportLab Paragraph (since Paragraph
+    interprets <tag> syntax)."""
     text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
     text = re.sub(r"\*([^*]+)\*", r"\1", text)
     text = re.sub(r"^#+\s*", "", text, flags=re.MULTILINE)
     text = re.sub(r"^[\-\*]\s+", "- ", text, flags=re.MULTILINE)
-    return text.replace("<", "(").replace(">", ")")
+    return text
+
+
+def _para_xml_escape(text: str) -> str:
+    """Escape only the chars that break ReportLab Paragraph XML parsing.
+    Notably does NOT escape `"` to `&quot;` — that's only needed inside
+    HTML attribute values, never in body text. The default html.escape()
+    quote-escape breaks Arabic rendering: bidi treats the 6-char `&quot;`
+    sequence as an LTR run and reorders it inside RTL paragraphs, leaving
+    visible `&quot;` literals in the PDF and sentence chunks scrambled."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _sanitize_inline(text: str) -> str:
+    """Strip markdown markup + escape what ReportLab cares about. Use the
+    raw escape form (no &quot; for double-quote) — see _para_xml_escape."""
+    return _para_xml_escape(_strip_md_markers(text))
 
 
 def _split_chat_blocks(content: str):
@@ -235,10 +251,27 @@ def _doc(buffer: BytesIO) -> SimpleDocTemplate:
 
 
 def _para(text: str, styles: dict, default_style: str = "body_en"):
-    """Build a Paragraph. AR strings get shape_arabic + RTL style."""
+    """Build a Paragraph. AR strings get shape_arabic + RTL style.
+
+    Shape ORDER matters: strip markdown first → shape (so reshaper sees
+    real Arabic glyphs, not escaped HTML) → escape XML chars on the
+    visual-order output. Skipping this dance and escaping first leaves
+    `&quot;` literals in the rendered PDF because bidi reorders the
+    6-char escape sequence inside RTL paragraphs."""
     if is_arabic(text):
-        return Paragraph(shape_arabic(text), styles["body_ar"])
-    return Paragraph(text, styles[default_style])
+        shaped = shape_arabic(_strip_md_markers(text))
+        return Paragraph(_para_xml_escape(shaped), styles["body_ar"])
+    return Paragraph(_sanitize_inline(text), styles[default_style])
+
+
+def _emit_chat_message_para(payload: str, styles: dict, story: list) -> None:
+    """Append one para-block to the story, AR-aware. Routes through _para
+    (right shape→escape order) + strip_emojis so old chats captured before
+    the no-emoji prompt rule still render cleanly without tofu boxes."""
+    cleaned = strip_emojis(payload) or payload
+    if not cleaned:
+        return
+    story.append(_para(cleaned, styles))
 
 
 def _table_block(payload: list[list[str]], styles: dict) -> Table:
@@ -297,13 +330,16 @@ def export_chat_pdf(messages: list[dict], date_format: str = "dual") -> bytes:
     for msg in messages:
         role = "You" if msg.get("role") == "user" else "TadqeeqAI"
         story.append(Paragraph(role, styles["role"]))
-        content = _sanitize_inline(msg.get("content", ""))
-        for kind, payload in _split_chat_blocks(content):
+        # Iterate the RAW content — _split_chat_blocks reads pipe-table
+        # markers which are ASCII (unaffected by AR). Each para block then
+        # goes through _emit_chat_message_para → _para which handles AR
+        # shape + escape in the right order.
+        for kind, payload in _split_chat_blocks(msg.get("content", "") or ""):
             if kind == "table":
                 story.append(_table_block(payload, styles))
                 story.append(Spacer(1, 6))
             else:
-                story.append(_para(payload, styles))
+                _emit_chat_message_para(payload, styles, story)
         if msg.get("sources"):
             srcs = ", ".join(s.get("article", "") for s in msg["sources"][:5])
             label = f"Sources: {srcs}"
@@ -346,13 +382,15 @@ def export_library_pdf(
     for msg in messages:
         label = "Question" if msg.get("role") == "user" else "Response"
         story.append(Paragraph(label, styles["role_lib"]))
-        content = _sanitize_inline(msg.get("content", ""))
-        for kind, payload in _split_chat_blocks(content):
+        # Iterate RAW content so _emit_chat_message_para → _para can run
+        # shape_arabic BEFORE XML-escaping. Escape-first produced &quot;
+        # literals + reordered Arabic sentence chunks (the bug the user hit).
+        for kind, payload in _split_chat_blocks(msg.get("content", "") or ""):
             if kind == "table":
                 story.append(_table_block(payload, styles))
                 story.append(Spacer(1, 6))
             else:
-                story.append(_para(payload, styles))
+                _emit_chat_message_para(payload, styles, story)
         if msg.get("sources"):
             lines: list[str] = []
             for s in msg["sources"]:
@@ -377,14 +415,21 @@ def export_compliance_pdf(
     date_format: str = "dual",
     lang: str = "auto",
 ) -> bytes:
-    """Render a compliance result as PDF — v3.2 .comp-card structure."""
+    """Render a compliance result as PDF.
+
+    Rewritten simpler than the first cut — every Paragraph routes through
+    _para (which handles AR shape→escape order) instead of a tangle of
+    inline ParagraphStyles. The first version broke because it built
+    ParagraphStyles with mixed parent+override combos that ReportLab
+    rejected at doc.build() time (silent ascii-string vs HexColor mixing,
+    likely). Keeping this version close to the brief exporter pattern.
+    """
     noto = register_arabic_fonts()
     styles = _build_styles(noto)
     buf = BytesIO()
     doc = _doc(buf)
 
     chrome_lang = resolve_compliance_lang(result, lang)
-    is_ar = chrome_lang == "ar"
     chrome = _COMPLIANCE_CHROME[chrome_lang]
     score = int(result.get("score", 0))
     if score >= 80:
@@ -394,78 +439,54 @@ def export_compliance_pdf(
     else:
         score_color = colors.HexColor("#FF453A")
 
-    def _ar_style(parent_key: str, **overrides) -> ParagraphStyle:
-        base = styles[parent_key]
-        return ParagraphStyle(
-            f"{parent_key}_compl_ar",
-            parent=base,
-            fontName=styles["ar_font"],
-            alignment=TA_RIGHT,
-            **overrides,
-        )
-
-    title_style = (
-        ParagraphStyle("compl_title_ar", parent=styles["title_brief"], fontName=styles["ar_bold"],
-                       alignment=TA_RIGHT, textColor=colors.HexColor("#2DD4BF"))
-        if is_ar
-        else styles["title_brief"]
-    )
-    meta_style = _ar_style("meta") if is_ar else styles["meta"]
     score_style = ParagraphStyle(
-        "compl_score", parent=styles["body_en"], fontSize=14, leading=18,
-        textColor=score_color, fontName=("Helvetica-Bold" if not is_ar else styles["ar_bold"]),
-        alignment=(TA_RIGHT if is_ar else TA_LEFT),
+        "compl_score",
+        parent=styles["body_en"],
+        fontSize=14,
+        leading=20,
+        textColor=score_color,
+        fontName="Helvetica-Bold",
+        spaceAfter=4,
     )
-    name_style = ParagraphStyle(
-        "compl_name", parent=styles["body_en"], fontSize=13, leading=18,
-        fontName=("Helvetica-Bold" if not is_ar else styles["ar_bold"]),
-        alignment=(TA_RIGHT if is_ar else TA_LEFT),
-    )
-    reg_style = _ar_style("sources") if is_ar else styles["sources"]
-    detail_style = styles["body_ar"] if is_ar else styles["body_en"]
 
-    title_text = shape_arabic(chrome["title"]) if is_ar else chrome["title"]
-    story: list = [Paragraph(title_text, title_style)]
+    story: list = []
 
-    doc_line = f"{chrome['doc_label']}: {result.get('filename', '')}"
-    gen_line = (
-        f"{chrome['gen_label']}: "
-        f"{format_dual_date(lang=chrome_lang, mode=date_format, with_time=True)}"
-    )
-    score_line = f"{chrome['score_word']}: {score}% ({chrome['score_label']})"
-
-    if is_ar:
-        story.append(Paragraph(shape_arabic(doc_line), meta_style))
-        story.append(Paragraph(shape_arabic(gen_line), meta_style))
-        story.append(Paragraph(shape_arabic(score_line), score_style))
+    # Title — reuse the existing AR-aware h1 styles
+    title_text = chrome["title"]
+    if chrome_lang == "ar":
+        story.append(Paragraph(shape_arabic(title_text), styles["h1_ar"]))
     else:
-        story.append(Paragraph(doc_line, meta_style))
-        story.append(Paragraph(gen_line, meta_style))
-        story.append(Paragraph(score_line, score_style))
+        story.append(Paragraph(title_text, styles["title_brief"]))
 
+    # Meta lines all route through _para which handles AR shape+escape
+    story.append(_para(f"{chrome['doc_label']}: {result.get('filename', '')}", styles))
+    story.append(
+        _para(
+            f"{chrome['gen_label']}: "
+            f"{format_dual_date(lang=chrome_lang, mode=date_format, with_time=True)}",
+            styles,
+        )
+    )
+    # Score gets the colored style; build with _sanitize_inline so any
+    # stray emojis or markdown markers don't break Paragraph parsing.
+    score_text = f"{chrome['score_word']}: {score}% ({chrome['score_label']})"
+    story.append(Paragraph(_sanitize_inline(strip_emojis(score_text) or score_text), score_style))
     story.append(HRFlowable(width="100%", thickness=1, color=RULE))
-    story.append(Spacer(1, 14))
+    story.append(Spacer(1, 12))
 
     for check in result.get("checks", []):
         is_pass = check.get("status") == "compliant"
         status_label = chrome["pass" if is_pass else "warn"]
         icon = "✓" if is_pass else "⚠"
         strings = _compliance_check_strings(check, chrome_lang)
-        name_line = f"{icon} {strings['name']} ({status_label})"
-        reg_line = f"{chrome['reg_label']}: {strings['regulation']}"
-        if is_ar:
-            story.append(Paragraph(shape_arabic(name_line), name_style))
-            story.append(Paragraph(shape_arabic(reg_line), reg_style))
-            if strings["detail"]:
-                story.append(Paragraph(shape_arabic(strings["detail"]), detail_style))
-        else:
-            story.append(Paragraph(name_line, name_style))
-            story.append(Paragraph(reg_line, reg_style))
-            if strings["detail"]:
-                story.append(Paragraph(_sanitize_inline(strings["detail"]), detail_style))
-        story.append(Spacer(1, 10))
 
-    story.append(Spacer(1, 8))
+        story.append(_para(f"{icon} {strings['name']} ({status_label})", styles))
+        story.append(_para(f"{chrome['reg_label']}: {strings['regulation']}", styles))
+        if strings.get("detail"):
+            story.append(_para(strings["detail"], styles))
+        story.append(Spacer(1, 8))
+
+    story.append(Spacer(1, 12))
     story.append(Paragraph(chrome["footer"], styles["footer"]))
     doc.build(story)
     return _bytes(buf)
