@@ -17,16 +17,19 @@ from app.core.document_store import get_document_store
 from app.core.exports import (
     export_brief_markdown,
     export_chat_markdown,
+    export_compliance_markdown,
     export_library_markdown,
 )
 from app.core.exports_docx import (
     export_brief_docx,
     export_chat_docx,
+    export_compliance_docx,
     export_library_docx,
 )
 from app.core.exports_pdf import (
     export_brief_pdf,
     export_chat_pdf,
+    export_compliance_pdf,
     export_library_pdf,
 )
 from app.core.history import get_library_store, get_regular_store
@@ -195,4 +198,53 @@ def export_brief_pdf_endpoint(doc_id: str, date_format: str = "dual") -> Respons
         )
     data = export_brief_pdf(brief["report"], date_format=date_format)
     fname = _safe_filename(f"tadqeeq-brief-{rec.get('filename', doc_id)}", "pdf")
+    return _pdf_response(data, fname)
+
+
+# ─── Compliance exports ────────────────────────────────────────────────
+# Same shape as the brief exports — caller supplies date_format + lang
+# (auto / en / ar). Compliance results are cached on the document record
+# at scan time so we don't need to re-run the check.
+
+def _require_compliance(doc_id: str) -> tuple[dict, dict]:
+    rec = get_document_store().get(doc_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail=f"Document not found: {doc_id}")
+    result = rec.get("compliance")
+    if not result or not result.get("checks"):
+        raise HTTPException(
+            status_code=404,
+            detail="No compliance result cached. Run a scan first via "
+            "POST /api/analysis/documents/{id}/compliance.",
+        )
+    return rec, result
+
+
+@router.get("/api/analysis/documents/{doc_id}/compliance/export/markdown")
+def export_compliance_md_endpoint(
+    doc_id: str, date_format: str = "dual", lang: str = "auto"
+) -> Response:
+    rec, result = _require_compliance(doc_id)
+    md = export_compliance_markdown(result, date_format=date_format, lang=lang)
+    fname = _safe_filename(f"tadqeeq-compliance-{rec.get('filename', doc_id)}", "md")
+    return _md_response(md, fname)
+
+
+@router.get("/api/analysis/documents/{doc_id}/compliance/export/docx")
+def export_compliance_docx_endpoint(
+    doc_id: str, date_format: str = "dual", lang: str = "auto"
+) -> Response:
+    rec, result = _require_compliance(doc_id)
+    data = export_compliance_docx(result, date_format=date_format, lang=lang)
+    fname = _safe_filename(f"tadqeeq-compliance-{rec.get('filename', doc_id)}", "docx")
+    return _docx_response(data, fname)
+
+
+@router.get("/api/analysis/documents/{doc_id}/compliance/export/pdf")
+def export_compliance_pdf_endpoint(
+    doc_id: str, date_format: str = "dual", lang: str = "auto"
+) -> Response:
+    rec, result = _require_compliance(doc_id)
+    data = export_compliance_pdf(result, date_format=date_format, lang=lang)
+    fname = _safe_filename(f"tadqeeq-compliance-{rec.get('filename', doc_id)}", "pdf")
     return _pdf_response(data, fname)
