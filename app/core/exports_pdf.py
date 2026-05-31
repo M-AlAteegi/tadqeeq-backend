@@ -129,7 +129,8 @@ def shape_arabic(text: str) -> str:
 def _strip_md_markers(text: str) -> str:
     """Strip markdown markup tokens. NOT HTML-safe — callers must escape
     AFTER calling this if they're using ReportLab Paragraph (since Paragraph
-    interprets <tag> syntax)."""
+    interprets <tag> syntax). Used by the AR rendering path because
+    shape_arabic + bidi don't compose with inline <b>/<i> tags."""
     text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
     text = re.sub(r"\*([^*]+)\*", r"\1", text)
     text = re.sub(r"^#+\s*", "", text, flags=re.MULTILINE)
@@ -147,10 +148,35 @@ def _para_xml_escape(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+# Private placeholder bytes the XML-escape pass won't touch. Markdown
+# emphasis tokens are converted to these placeholders first, then we
+# escape user text, then swap placeholders for the real <b>/<i> tags
+# we want ReportLab Paragraph to interpret. That order keeps any
+# stray user "<", ">", "&" safely escaped without also escaping the
+# tags we just inserted.
+_PLACEHOLDER_B_OPEN = "\x01B\x01"
+_PLACEHOLDER_B_CLOSE = "\x01b\x01"
+_PLACEHOLDER_I_OPEN = "\x01I\x01"
+_PLACEHOLDER_I_CLOSE = "\x01i\x01"
+
+
 def _sanitize_inline(text: str) -> str:
-    """Strip markdown markup + escape what ReportLab cares about. Use the
-    raw escape form (no &quot; for double-quote) — see _para_xml_escape."""
-    return _para_xml_escape(_strip_md_markers(text))
+    """Convert markdown emphasis to ReportLab <b>/<i> tags + escape what
+    ReportLab cares about. EN-only — the AR path uses _strip_md_markers
+    directly so shape_arabic sees plain text.
+
+    Order matters: emphasis → placeholders FIRST so user-supplied "<",
+    ">", "&" get safely escaped by _para_xml_escape, THEN swap the
+    placeholders for real tags. Headings + bullets get stripped (not
+    converted) — they read as plain prose in the PDF body."""
+    text = re.sub(r"\*\*([^*]+)\*\*", f"{_PLACEHOLDER_B_OPEN}\\1{_PLACEHOLDER_B_CLOSE}", text)
+    text = re.sub(r"\*([^*]+)\*", f"{_PLACEHOLDER_I_OPEN}\\1{_PLACEHOLDER_I_CLOSE}", text)
+    text = re.sub(r"^#+\s*", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^[\-\*]\s+", "- ", text, flags=re.MULTILINE)
+    text = _para_xml_escape(text)
+    text = text.replace(_PLACEHOLDER_B_OPEN, "<b>").replace(_PLACEHOLDER_B_CLOSE, "</b>")
+    text = text.replace(_PLACEHOLDER_I_OPEN, "<i>").replace(_PLACEHOLDER_I_CLOSE, "</i>")
+    return text
 
 
 def _split_chat_blocks(content: str):

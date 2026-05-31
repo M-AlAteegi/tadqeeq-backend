@@ -146,24 +146,65 @@ def _set_margins(doc, cm: float = 2.0) -> None:
         section.bottom_margin = Cm(cm)
 
 
+# Split a body line into ('plain', text) / ('bold', text) / ('italic', text)
+# segments. **bold** runs are matched first so the inner * markers don't
+# trip the italic regex. Keeps emphasis local to the line — multi-line
+# emphasis spans aren't in the corpus we render.
+_MD_INLINE_RE = re.compile(r"(\*\*[^*\n]+\*\*|\*[^*\n]+\*)")
+
+
+def _md_split(text: str) -> list[tuple[str, str]]:
+    parts: list[tuple[str, str]] = []
+    for chunk in _MD_INLINE_RE.split(text):
+        if not chunk:
+            continue
+        if chunk.startswith("**") and chunk.endswith("**") and len(chunk) > 4:
+            parts.append(("bold", chunk[2:-2]))
+        elif chunk.startswith("*") and chunk.endswith("*") and len(chunk) > 2:
+            parts.append(("italic", chunk[1:-1]))
+        else:
+            parts.append(("plain", chunk))
+    return parts
+
+
 def _add_paragraph_text(
     doc, text: str, *, size: int = 11, bold: bool = False, color=None, font=EN_FONT
 ):
+    """Append a paragraph carrying `text`. Markdown emphasis (**bold**,
+    *italic*) is converted into multiple Runs with the appropriate flag
+    flipped, so the user's emphasis survives into Word. The caller's
+    `bold=True` (used for headings / role labels) is OR'd with per-run
+    emphasis — a **word** inside an h2 stays bold either way.
+
+    Return signature stays (paragraph, run) for caller compatibility;
+    `run` is the LAST run appended."""
     p = doc.add_paragraph()
     p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
     ar = is_arabic(text)
     if ar:
         _make_rtl(p)
-    r = p.add_run(text)
-    r.font.size = Pt(size)
-    r.font.bold = bold
-    if color is not None:
-        r.font.color.rgb = RGBColor(*color)
-    if ar:
-        _set_cs_font(r, AR_FONT)
-    else:
-        r.font.name = font
-    return p, r
+    last_run = None
+    for kind, segment in _md_split(text) or [("plain", text)]:
+        if not segment:
+            continue
+        r = p.add_run(segment)
+        r.font.size = Pt(size)
+        r.font.bold = bold or kind == "bold"
+        r.font.italic = kind == "italic"
+        if color is not None:
+            r.font.color.rgb = RGBColor(*color)
+        if ar:
+            _set_cs_font(r, AR_FONT)
+        else:
+            r.font.name = font
+        last_run = r
+    if last_run is None:
+        # All-empty / blank text — keep the paragraph existing so the
+        # caller's layout offset is preserved.
+        last_run = p.add_run("")
+        last_run.font.size = Pt(size)
+        last_run.font.name = font
+    return p, last_run
 
 
 def _write_table_cell(cell, text: str, *, ar: bool, bold: bool = False, color=None) -> None:
