@@ -30,7 +30,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.pdfmetrics import registerFontFamily
+from reportlab.pdfbase.pdfmetrics import registerFontFamily, stringWidth
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (
     HRFlowable,
@@ -250,17 +250,108 @@ def _doc(buffer: BytesIO) -> SimpleDocTemplate:
     )
 
 
+# Pre-wrap width for AR paragraphs. A4 (595.27 pt) - 2cm L margin - 2cm R
+# margin ≈ 481.88 pt of content width. Pull back to 470 to absorb the
+# small variance between shaped-glyph width estimate and ReportLab's
+# actual layout (avoids the occasional overflow that would force
+# ReportLab to wrap our pre-wrapped line again).
+_AR_LINE_MAX_PT = 470.0
+
+
+def _shape_ar_lines(text: str, font_name: str, font_size: float) -> list[str]:
+    """Pre-wrap LOGICAL Arabic text into visual-order lines that each fit
+    within _AR_LINE_MAX_PT after shaping.
+
+    Why this exists: shape_arabic + bidi.get_display produce a VISUAL-order
+    string. If we hand a long visual-order string to ReportLab Paragraph,
+    its word-wrap splits at a character position that corresponds to the
+    LOGICAL end of the sentence (visual reads RTL). The result is line 1
+    of the PDF showing the end of the sentence and line 2 the start —
+    fluent Arabic readers see scrambled phrasing.
+
+    Fix: walk LOGICAL words greedily, measure each candidate chunk's
+    shaped width via stringWidth, emit a line when the next word would
+    overflow. Each emitted line is independently shaped, so each one is
+    visually-correct in isolation. Caller joins them with <br/> inside a
+    single Paragraph so ReportLab doesn't second-guess our wrap."""
+    if not text:
+        return []
+    # Match shape_arabic's normalization so word boundaries are stable
+    # and the same zero-width chars get stripped before measurement.
+    text = unicodedata.normalize("NFC", text)
+    text = text.translate({
+        0x200B: None, 0x200C: None, 0x200D: None,
+        0x200E: None, 0x200F: None, 0xFEFF: None,
+    })
+    out: list[str] = []
+    for raw_line in text.split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+        # If the line has no Arabic, pass it through shape_arabic which
+        # is a no-op for non-AR — keeps mixed content rendering correct.
+        if not _ARABIC_RE.search(line):
+            try:
+                out.append(get_display(arabic_reshaper.reshape(line)))
+            except Exception:
+                out.append(line)
+            continue
+        words = line.split(" ")
+        cur: list[str] = []
+        for w in words:
+            trial = cur + [w]
+            try:
+                shaped_trial = get_display(arabic_reshaper.reshape(" ".join(trial)))
+            except Exception:
+                shaped_trial = " ".join(trial)
+            if stringWidth(shaped_trial, font_name, font_size) <= _AR_LINE_MAX_PT:
+                cur = trial
+            else:
+                if cur:
+                    try:
+                        out.append(get_display(arabic_reshaper.reshape(" ".join(cur))))
+                    except Exception:
+                        out.append(" ".join(cur))
+                    cur = [w]
+                else:
+                    # Single word wider than the content column — emit
+                    # alone and let ReportLab clip rather than skip it.
+                    try:
+                        out.append(get_display(arabic_reshaper.reshape(w)))
+                    except Exception:
+                        out.append(w)
+                    cur = []
+        if cur:
+            try:
+                out.append(get_display(arabic_reshaper.reshape(" ".join(cur))))
+            except Exception:
+                out.append(" ".join(cur))
+    return out
+
+
 def _para(text: str, styles: dict, default_style: str = "body_en"):
     """Build a Paragraph. AR strings get shape_arabic + RTL style.
 
-    Shape ORDER matters: strip markdown first → shape (so reshaper sees
-    real Arabic glyphs, not escaped HTML) → escape XML chars on the
-    visual-order output. Skipping this dance and escaping first leaves
-    `&quot;` literals in the rendered PDF because bidi reorders the
-    6-char escape sequence inside RTL paragraphs."""
+    For AR, the text is pre-wrapped into visual-order lines joined by
+    <br/> inside a single Paragraph. This bypasses ReportLab's own
+    word-wrap, which would split a long visual-order string at the
+    WRONG logical position (visual order reads RTL, so the visual
+    midpoint corresponds to the logical end of the sentence — fluent
+    readers see scrambled phrasing). See _shape_ar_lines.
+
+    Shape ORDER also matters: strip markdown first → shape (so reshaper
+    sees real Arabic glyphs, not escaped HTML) → escape XML chars on
+    the visual-order output. Skipping this dance and escaping first
+    leaves `&quot;` literals in the rendered PDF because bidi reorders
+    the 6-char escape sequence inside RTL paragraphs."""
     if is_arabic(text):
-        shaped = shape_arabic(_strip_md_markers(text))
-        return Paragraph(_para_xml_escape(shaped), styles["body_ar"])
+        style = styles["body_ar"]
+        stripped = _strip_md_markers(text)
+        lines = _shape_ar_lines(stripped, style.fontName, style.fontSize)
+        if not lines:
+            return Paragraph("", style)
+        escaped = [_para_xml_escape(ln) for ln in lines]
+        return Paragraph("<br/>".join(escaped), style)
     return Paragraph(_sanitize_inline(text), styles[default_style])
 
 
