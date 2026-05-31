@@ -325,7 +325,7 @@ def _shape_ar_lines(text: str, font_name: str, font_size: float) -> list[str]:
         words = line.split(" ")
         cur: list[str] = []
         for w in words:
-            trial = cur + [w]
+            trial = [*cur, w]
             try:
                 shaped_trial = get_display(arabic_reshaper.reshape(" ".join(trial)))
             except Exception:
